@@ -11,7 +11,6 @@ import android.view.WindowManager;
 import org.opencv.android.BaseLoaderCallback;
 import org.opencv.android.CameraActivity;
 import org.opencv.android.CameraBridgeViewBase;
-import org.opencv.android.JavaCameraView;
 import org.opencv.android.OpenCVLoader;
 import org.opencv.core.Mat;
 
@@ -36,7 +35,7 @@ public class FullscreenActivity extends CameraActivity implements CameraBridgeVi
 
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
-        openCvCamera = (JavaCameraView) findViewById(R.id.CameraView);
+        openCvCamera = (RotatingCameraView) findViewById(R.id.CameraView);
         openCvCamera.setVisibility(SurfaceView.VISIBLE);
         openCvCamera.setCvCameraViewListener(this);
 
