@@ -1,5 +1,7 @@
 package gov.ismonnet.blindgambling;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.SurfaceView;
@@ -7,20 +9,24 @@ import android.view.View;
 import android.view.WindowManager;
 
 import org.opencv.android.BaseLoaderCallback;
+import org.opencv.android.CameraActivity;
 import org.opencv.android.CameraBridgeViewBase;
 import org.opencv.android.JavaCameraView;
 import org.opencv.android.OpenCVLoader;
 import org.opencv.core.Mat;
 
+import java.util.Collections;
+import java.util.List;
+
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.appcompat.app.AppCompatActivity;
 
 import static android.content.ContentValues.TAG;
 
-public class FullscreenActivity extends AppCompatActivity implements CameraBridgeViewBase.CvCameraViewListener2 {
+public class FullscreenActivity extends CameraActivity implements CameraBridgeViewBase.CvCameraViewListener2 {
 
-    private CameraBridgeViewBase cameraBridgeViewBase;
-    private BaseLoaderCallback baseLoaderCallback;
+    private CameraBridgeViewBase openCvCamera;
+    private BaseLoaderCallback openCvLoaderCallback;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -30,15 +36,15 @@ public class FullscreenActivity extends AppCompatActivity implements CameraBridg
 
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
-        cameraBridgeViewBase = (JavaCameraView) findViewById(R.id.CameraView);
-        cameraBridgeViewBase.setVisibility(SurfaceView.VISIBLE);
-        cameraBridgeViewBase.setCvCameraViewListener(this);
+        openCvCamera = (JavaCameraView) findViewById(R.id.CameraView);
+        openCvCamera.setVisibility(SurfaceView.VISIBLE);
+        openCvCamera.setCvCameraViewListener(this);
 
-        baseLoaderCallback = new BaseLoaderCallback(this) {
+        openCvLoaderCallback = new BaseLoaderCallback(this) {
             @Override
             public void onManagerConnected(int status) {
                 if (status == BaseLoaderCallback.SUCCESS) {
-                    cameraBridgeViewBase.enableView();
+                    openCvCamera.enableView();
                     return;
                 }
                 super.onManagerConnected(status);
@@ -63,12 +69,11 @@ public class FullscreenActivity extends AppCompatActivity implements CameraBridg
 
         if(!OpenCVLoader.initDebug()) {
             Log.d(TAG, "Couldn't find internal OpenCV library. Attempting to load it using OpenCV Engine service.");
-
             OpenCVLoader.initAsync(OpenCVLoader.OPENCV_VERSION_3_4_0,
-                    getApplicationContext(),
-                    baseLoaderCallback);
+                    this,
+                    openCvLoaderCallback);
         } else {
-            baseLoaderCallback.onManagerConnected(baseLoaderCallback.SUCCESS);
+            openCvLoaderCallback.onManagerConnected(BaseLoaderCallback.SUCCESS);
         }
     }
 
@@ -76,16 +81,36 @@ public class FullscreenActivity extends AppCompatActivity implements CameraBridg
     protected void onPause() {
         super.onPause();
 
-        if(cameraBridgeViewBase != null)
-            cameraBridgeViewBase.disableView();
+        if(openCvCamera != null)
+            openCvCamera.disableView();
     }
+
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
 
-        if(cameraBridgeViewBase != null)
-            cameraBridgeViewBase.disableView();
+        if(openCvCamera != null)
+            openCvCamera.disableView();
+    }
+
+    @Override
+    protected List<? extends CameraBridgeViewBase> getCameraViewList() {
+        return Collections.singletonList(openCvCamera);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode,
+                                           @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        for(int i = 0; i < permissions.length; i++)
+            if(permissions[i].equals(Manifest.permission.CAMERA) &&
+                    grantResults[i] == PackageManager.PERMISSION_DENIED) {
+                Log.d(TAG, "The user denied access to the camera");
+                // TODO: insult the user not giving camera permission
+            }
     }
 
     @Override
