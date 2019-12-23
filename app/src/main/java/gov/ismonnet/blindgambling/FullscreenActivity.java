@@ -3,6 +3,7 @@ package gov.ismonnet.blindgambling;
 import android.Manifest;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
+import android.util.ArrayMap;
 import android.util.Log;
 import android.view.SurfaceView;
 import android.view.View;
@@ -16,13 +17,12 @@ import org.opencv.core.CvType;
 import org.opencv.core.Mat;
 import org.opencv.core.MatOfPoint;
 import org.opencv.core.MatOfPoint2f;
-import org.opencv.core.Point;
-import org.opencv.core.RotatedRect;
 import org.opencv.core.Scalar;
+import org.opencv.core.Size;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -30,26 +30,28 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import static android.content.ContentValues.TAG;
+import static org.opencv.imgproc.Imgproc.ADAPTIVE_THRESH_MEAN_C;
 import static org.opencv.imgproc.Imgproc.CHAIN_APPROX_SIMPLE;
+import static org.opencv.imgproc.Imgproc.GaussianBlur;
 import static org.opencv.imgproc.Imgproc.RETR_TREE;
 import static org.opencv.imgproc.Imgproc.THRESH_BINARY;
+import static org.opencv.imgproc.Imgproc.adaptiveThreshold;
 import static org.opencv.imgproc.Imgproc.approxPolyDP;
 import static org.opencv.imgproc.Imgproc.arcLength;
+import static org.opencv.imgproc.Imgproc.contourArea;
 import static org.opencv.imgproc.Imgproc.drawContours;
 import static org.opencv.imgproc.Imgproc.findContours;
-import static org.opencv.imgproc.Imgproc.line;
-import static org.opencv.imgproc.Imgproc.minAreaRect;
-import static org.opencv.imgproc.Imgproc.rectangle;
-import static org.opencv.imgproc.Imgproc.threshold;
 
 public class FullscreenActivity extends CameraActivity implements CameraBridgeViewBase.CvCameraViewListener2 {
+
+    private static final int CARD_MAX_AREA = 120000;
+    private static final int CARD_MIN_AREA = 25000;
 
     private CameraBridgeViewBase openCvCamera;
     private BaseLoaderCallback openCvLoaderCallback;
 
+    private Mat blurMat;
     private Mat thresholdMat;
-
-    private List<MatOfPoint> contours;
     private Mat hierarchy;
 
     private MatOfPoint2f contour2f;
@@ -142,9 +144,8 @@ public class FullscreenActivity extends CameraActivity implements CameraBridgeVi
 
     @Override
     public void onCameraViewStarted(int width, int height) {
+        blurMat = new Mat();
         thresholdMat = new Mat();
-
-        contours = new ArrayList<>();
         hierarchy = new Mat();
 
         contour2f = new MatOfPoint2f();
@@ -153,9 +154,8 @@ public class FullscreenActivity extends CameraActivity implements CameraBridgeVi
 
     @Override
     public void onCameraViewStopped() {
+        blurMat.release();
         thresholdMat.release();
-
-        contours.clear();
         hierarchy.release();
 
         contour2f.release();
@@ -168,48 +168,69 @@ public class FullscreenActivity extends CameraActivity implements CameraBridgeVi
 
         final Mat toDraw = inputFrame.rgba();
         final Mat grey = inputFrame.gray();
-        
-        threshold(grey, thresholdMat, 200, 255, THRESH_BINARY);
 
-        for (Map.Entry<MatOfPoint, Boolean> entry : findCards().entrySet()) {
+        GaussianBlur(grey, blurMat, new Size(5,5),0);
+        adaptiveThreshold(blurMat, thresholdMat,
+                255,
+                ADAPTIVE_THRESH_MEAN_C,
+                THRESH_BINARY,
+                75, 10);
 
-            final MatOfPoint contour = entry.getKey();
-            final boolean isCard = entry.getValue();
+        final List<MatOfPoint> contours = new ArrayList<>();
+        findContours(thresholdMat, contours, hierarchy, RETR_TREE, CHAIN_APPROX_SIMPLE);
 
+        drawContours(toDraw,
+                contours,
+                -1,
+                new Scalar(255, 0, 0, 0), 5);
+
+        for (MatOfPoint card : findCards(contours, hierarchy))
             drawContours(toDraw,
-                    Collections.singletonList(contour),
+                    Collections.singletonList(card),
                     -1,
-                    new Scalar(255D, 0D, 0D, 0D));
-
-            if (!isCard)
-                continue;
-
-            contour.convertTo(contour2f, CvType.CV_32F);
-
-            final RotatedRect rotatedRect = minAreaRect(contour2f);
-            rectangle(toDraw, rotatedRect.boundingRect(), new Scalar(0D, 255D, 0D, 0D));
-
-            final Point[] points = new Point[4];
-            rotatedRect.points(points);
-
-            for (int j = 0; j < 4; j++)
-                line(toDraw,
-                        points[j],
-                        points[(j + 1) % 4],
-                        new Scalar(0, 0, 255, 0));
-        }
+                    new Scalar(0, 0, 255, 0), 5);
 
         return toDraw;
     }
 
-    private Map<MatOfPoint, Boolean> findCards() {
+    private Collection<MatOfPoint> findCards(List<MatOfPoint> contours, Mat hierarchy) {
 
-        contours.clear();
-        findContours(thresholdMat, contours, hierarchy, RETR_TREE, CHAIN_APPROX_SIMPLE);
+        // Sort the contours by size, so that when computing whether
+        // a contour is a card, it can be easily checked if its parent contour,
+        // if it exists, is a card itself
 
-        final Map<MatOfPoint, Boolean> ret = new HashMap<>();
-        for (int i = 0; i < contours.size(); i++) {
-            final MatOfPoint contour = contours.get(i);
+        final List<Integer> sortedContoursIdx = new ArrayList<>();
+
+        for(int i = 0; i < contours.size(); i++)
+            sortedContoursIdx.add(i);
+        Collections.sort(sortedContoursIdx, (i0, i1) -> Double.compare(
+                contourArea(contours.get(i0)),
+                contourArea(contours.get(i1))));
+
+        final List<MatOfPoint> sortedContours = new ArrayList<>();
+        final List<double[]> sortedHierarchy = new ArrayList<>();
+
+        for(int i : sortedContoursIdx) {
+            sortedContours.add(contours.get(i));
+            sortedHierarchy.add(hierarchy.get(0, i));
+        }
+
+        // Search possible cards in the contours
+
+        final Map<Integer, MatOfPoint> cards = new ArrayMap<>();
+        for (int i = 0; i < sortedContours.size(); i++) {
+            final MatOfPoint contour = sortedContours.get(i);
+
+            // [Next, Previous, First_Child, Parent]
+            final double[] contourInfo = sortedHierarchy.get(i);
+            final int parentContour = (int) contourInfo[3];
+
+            if(parentContour != -1 && cards.containsKey(parentContour)) // Not in another card
+                continue;
+
+            final double area = contourArea(contour);
+            if(area < CARD_MIN_AREA || area > CARD_MAX_AREA) // Size is decent
+                continue;
 
             contour.convertTo(contour2f, CvType.CV_32F);
             approxPolyDP(contour2f,
@@ -218,13 +239,12 @@ public class FullscreenActivity extends CameraActivity implements CameraBridgeVi
                     true);
             final double vertexCount = approx2f.total();
 
-            // [Next, Previous, First_Child, Parent]
-            final double[] contourInfo = hierarchy.get(0, i);
-            final double parentContour = contourInfo[3];
+//            if(vertexCount != 4) // Is a quad
+//                continue;
 
-            ret.put(contour, vertexCount == 4 && parentContour == -1);
+            cards.put(i, contour);
         }
 
-        return ret;
+        return cards.values();
     }
 }
