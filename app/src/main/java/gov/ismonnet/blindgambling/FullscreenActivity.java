@@ -32,15 +32,20 @@ import androidx.annotation.Nullable;
 import static android.content.ContentValues.TAG;
 import static org.opencv.imgproc.Imgproc.ADAPTIVE_THRESH_MEAN_C;
 import static org.opencv.imgproc.Imgproc.CHAIN_APPROX_SIMPLE;
+import static org.opencv.imgproc.Imgproc.COLOR_GRAY2BGR;
+import static org.opencv.imgproc.Imgproc.CV_SHAPE_RECT;
+import static org.opencv.imgproc.Imgproc.FILLED;
 import static org.opencv.imgproc.Imgproc.GaussianBlur;
+import static org.opencv.imgproc.Imgproc.MORPH_CLOSE;
 import static org.opencv.imgproc.Imgproc.RETR_TREE;
 import static org.opencv.imgproc.Imgproc.THRESH_BINARY;
 import static org.opencv.imgproc.Imgproc.adaptiveThreshold;
-import static org.opencv.imgproc.Imgproc.approxPolyDP;
-import static org.opencv.imgproc.Imgproc.arcLength;
 import static org.opencv.imgproc.Imgproc.contourArea;
+import static org.opencv.imgproc.Imgproc.cvtColor;
 import static org.opencv.imgproc.Imgproc.drawContours;
 import static org.opencv.imgproc.Imgproc.findContours;
+import static org.opencv.imgproc.Imgproc.getStructuringElement;
+import static org.opencv.imgproc.Imgproc.morphologyEx;
 
 public class FullscreenActivity extends CameraActivity implements CameraBridgeViewBase.CvCameraViewListener2 {
 
@@ -50,8 +55,11 @@ public class FullscreenActivity extends CameraActivity implements CameraBridgeVi
     private CameraBridgeViewBase openCvCamera;
     private BaseLoaderCallback openCvLoaderCallback;
 
+    private Size gaussianKernel;
     private Mat blurMat;
     private Mat thresholdMat;
+    private Mat morphKernel;
+    private Mat morphMat;
     private Mat hierarchy;
 
     private MatOfPoint2f contour2f;
@@ -144,8 +152,11 @@ public class FullscreenActivity extends CameraActivity implements CameraBridgeVi
 
     @Override
     public void onCameraViewStarted(int width, int height) {
+        gaussianKernel = new Size(5,5);
         blurMat = new Mat();
         thresholdMat = new Mat();
+        morphMat = new Mat();
+        morphKernel = getStructuringElement(CV_SHAPE_RECT, new Size(5, 5));
         hierarchy = new Mat();
 
         contour2f = new MatOfPoint2f();
@@ -156,6 +167,7 @@ public class FullscreenActivity extends CameraActivity implements CameraBridgeVi
     public void onCameraViewStopped() {
         blurMat.release();
         thresholdMat.release();
+        morphKernel.release();
         hierarchy.release();
 
         contour2f.release();
@@ -166,31 +178,36 @@ public class FullscreenActivity extends CameraActivity implements CameraBridgeVi
     public Mat onCameraFrame(CameraBridgeViewBase.CvCameraViewFrame inputFrame) {
         // Frame taken 30 times per second
 
-        final Mat toDraw = inputFrame.rgba();
+//        final Mat toDraw = inputFrame.rgba();
         final Mat grey = inputFrame.gray();
 
-        GaussianBlur(grey, blurMat, new Size(5,5),0);
+        GaussianBlur(grey, blurMat, gaussianKernel, 0);
         adaptiveThreshold(blurMat, thresholdMat,
                 255,
                 ADAPTIVE_THRESH_MEAN_C,
                 THRESH_BINARY,
-                75, 10);
+                105, -10);
+        morphologyEx(thresholdMat, morphMat, MORPH_CLOSE, morphKernel);
+
+        final Mat toDraw = new Mat();
+        cvtColor(morphMat, toDraw, COLOR_GRAY2BGR);
 
         final List<MatOfPoint> contours = new ArrayList<>();
-        findContours(thresholdMat, contours, hierarchy, RETR_TREE, CHAIN_APPROX_SIMPLE);
+        findContours(morphMat, contours, hierarchy, RETR_TREE, CHAIN_APPROX_SIMPLE);
 
-        drawContours(toDraw,
-                contours,
-                -1,
-                new Scalar(255, 0, 0, 0), 5);
+//        drawContours(toDraw,
+//                contours,
+//                -1,
+//                new Scalar(255, 0, 0, 0), 5);
 
+        final Mat mask = new Mat(grey.size(), CvType.CV_8U, new Scalar(0));
         for (MatOfPoint card : findCards(contours, hierarchy))
-            drawContours(toDraw,
+            drawContours(mask,
                     Collections.singletonList(card),
                     -1,
-                    new Scalar(0, 0, 255, 0), 5);
+                    new Scalar(255), FILLED);
 
-        return toDraw;
+        return mask;
     }
 
     private Collection<MatOfPoint> findCards(List<MatOfPoint> contours, Mat hierarchy) {
@@ -221,25 +238,44 @@ public class FullscreenActivity extends CameraActivity implements CameraBridgeVi
         for (int i = 0; i < sortedContours.size(); i++) {
             final MatOfPoint contour = sortedContours.get(i);
 
+            // Not in another card
+
             // [Next, Previous, First_Child, Parent]
             final double[] contourInfo = sortedHierarchy.get(i);
             final int parentContour = (int) contourInfo[3];
 
-            if(parentContour != -1 && cards.containsKey(parentContour)) // Not in another card
+            if(parentContour != -1 && cards.containsKey(parentContour))
                 continue;
+
+            // Contains at least 2 other contours
+
+//            final int childContour = (int) contourInfo[2];
+//            if(childContour == -1)
+//                continue;
+//
+//            final double[] childContourInfo = sortedHierarchy.get(childContour);
+//            final int childSibling = (int) childContourInfo[0];
+//            if(childSibling == -1)
+//                continue;
+
+            // Size is decent
 
             final double area = contourArea(contour);
-            if(area < CARD_MIN_AREA || area > CARD_MAX_AREA) // Size is decent
+            if(area < CARD_MIN_AREA)
                 continue;
+//            if(area > CARD_MAX_AREA)
+//                continue;
 
-            contour.convertTo(contour2f, CvType.CV_32F);
-            approxPolyDP(contour2f,
-                    approx2f,
-                    0.02D * arcLength(contour2f, true),
-                    true);
-            final double vertexCount = approx2f.total();
+            // Is a quad
 
-//            if(vertexCount != 4) // Is a quad
+//            contour.convertTo(contour2f, CvType.CV_32F);
+//            approxPolyDP(contour2f,
+//                    approx2f,
+//                    0.01D * arcLength(contour2f, true),
+//                    true);
+//            final double vertexCount = approx2f.total();
+//
+//            if(vertexCount != 4)
 //                continue;
 
             cards.put(i, contour);
