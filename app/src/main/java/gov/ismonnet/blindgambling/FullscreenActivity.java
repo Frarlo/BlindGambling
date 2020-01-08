@@ -17,6 +17,8 @@ import org.opencv.core.CvType;
 import org.opencv.core.Mat;
 import org.opencv.core.MatOfPoint;
 import org.opencv.core.MatOfPoint2f;
+import org.opencv.core.Point;
+import org.opencv.core.RotatedRect;
 import org.opencv.core.Scalar;
 import org.opencv.core.Size;
 
@@ -32,19 +34,26 @@ import androidx.annotation.Nullable;
 import static android.content.ContentValues.TAG;
 import static org.opencv.imgproc.Imgproc.ADAPTIVE_THRESH_MEAN_C;
 import static org.opencv.imgproc.Imgproc.CHAIN_APPROX_SIMPLE;
+import static org.opencv.imgproc.Imgproc.COLOR_BGR2GRAY;
+import static org.opencv.imgproc.Imgproc.COLOR_BGRA2GRAY;
 import static org.opencv.imgproc.Imgproc.COLOR_GRAY2BGR;
 import static org.opencv.imgproc.Imgproc.CV_SHAPE_RECT;
 import static org.opencv.imgproc.Imgproc.FILLED;
 import static org.opencv.imgproc.Imgproc.GaussianBlur;
 import static org.opencv.imgproc.Imgproc.MORPH_CLOSE;
+import static org.opencv.imgproc.Imgproc.MORPH_OPEN;
 import static org.opencv.imgproc.Imgproc.RETR_TREE;
 import static org.opencv.imgproc.Imgproc.THRESH_BINARY;
 import static org.opencv.imgproc.Imgproc.adaptiveThreshold;
+import static org.opencv.imgproc.Imgproc.approxPolyDP;
+import static org.opencv.imgproc.Imgproc.arcLength;
 import static org.opencv.imgproc.Imgproc.contourArea;
 import static org.opencv.imgproc.Imgproc.cvtColor;
 import static org.opencv.imgproc.Imgproc.drawContours;
+import static org.opencv.imgproc.Imgproc.fillConvexPoly;
 import static org.opencv.imgproc.Imgproc.findContours;
 import static org.opencv.imgproc.Imgproc.getStructuringElement;
+import static org.opencv.imgproc.Imgproc.minAreaRect;
 import static org.opencv.imgproc.Imgproc.morphologyEx;
 
 public class FullscreenActivity extends CameraActivity implements CameraBridgeViewBase.CvCameraViewListener2 {
@@ -178,36 +187,57 @@ public class FullscreenActivity extends CameraActivity implements CameraBridgeVi
     public Mat onCameraFrame(CameraBridgeViewBase.CvCameraViewFrame inputFrame) {
         // Frame taken 30 times per second
 
-//        final Mat toDraw = inputFrame.rgba();
+        final Mat toDraw = inputFrame.rgba();
         final Mat grey = inputFrame.gray();
 
         GaussianBlur(grey, blurMat, gaussianKernel, 0);
+//        adaptiveThreshold(blurMat, thresholdMat,
+//                255,
+//                ADAPTIVE_THRESH_MEAN_C,
+//                THRESH_BINARY,
+//                105, -10);
         adaptiveThreshold(blurMat, thresholdMat,
                 255,
                 ADAPTIVE_THRESH_MEAN_C,
                 THRESH_BINARY,
-                105, -10);
-        morphologyEx(thresholdMat, morphMat, MORPH_CLOSE, morphKernel);
-
-        final Mat toDraw = new Mat();
-        cvtColor(morphMat, toDraw, COLOR_GRAY2BGR);
+                15, 8);
+        morphologyEx(thresholdMat, morphMat, MORPH_OPEN, morphKernel);
 
         final List<MatOfPoint> contours = new ArrayList<>();
         findContours(morphMat, contours, hierarchy, RETR_TREE, CHAIN_APPROX_SIMPLE);
 
-//        drawContours(toDraw,
-//                contours,
-//                -1,
-//                new Scalar(255, 0, 0, 0), 5);
-
         final Mat mask = new Mat(grey.size(), CvType.CV_8U, new Scalar(0));
-        for (MatOfPoint card : findCards(contours, hierarchy))
-            drawContours(mask,
-                    Collections.singletonList(card),
-                    -1,
-                    new Scalar(255), FILLED);
+//        for (MatOfPoint card : findCards(contours, hierarchy))
+        for (int i = 0; i < contours.size(); i++) {
+            final MatOfPoint contour = contours.get(i);
+            // [Next, Previous, First_Child, Parent]
+            final double[] contourInfo = hierarchy.get(0, i);
 
-        return mask;
+            if(contourInfo[2] != -1)
+                continue;
+
+            final double area = contourArea(contour);
+            if(area < 100)
+                continue;
+
+            MatOfPoint2f contour2f = new MatOfPoint2f();
+            contour.convertTo(contour2f, CvType.CV_32F);
+
+            final RotatedRect rect = minAreaRect(contour2f);
+            final Point[] points = new Point[4];
+            rect.points(points);
+            fillConvexPoly(mask, new MatOfPoint(points), new Scalar(255));
+
+//            drawContours(mask,
+//                    Collections.singletonList(contour),
+//                    -1,
+//                    new Scalar(255), FILLED);
+        }
+
+        final Mat masked = new Mat();
+        toDraw.copyTo(masked, mask);
+
+        return masked;
     }
 
     private Collection<MatOfPoint> findCards(List<MatOfPoint> contours, Mat hierarchy) {
@@ -268,15 +298,15 @@ public class FullscreenActivity extends CameraActivity implements CameraBridgeVi
 
             // Is a quad
 
-//            contour.convertTo(contour2f, CvType.CV_32F);
-//            approxPolyDP(contour2f,
-//                    approx2f,
-//                    0.01D * arcLength(contour2f, true),
-//                    true);
-//            final double vertexCount = approx2f.total();
-//
-//            if(vertexCount != 4)
-//                continue;
+            contour.convertTo(contour2f, CvType.CV_32F);
+            approxPolyDP(contour2f,
+                    approx2f,
+                    0.01D * arcLength(contour2f, true),
+                    true);
+            final double vertexCount = approx2f.total();
+
+            if(vertexCount != 4)
+                continue;
 
             cards.put(i, contour);
         }
